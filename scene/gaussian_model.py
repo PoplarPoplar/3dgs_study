@@ -126,17 +126,18 @@ class GaussianModel:
     # 从点云数据创建模型
     def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float):
         self.spatial_lr_scale = spatial_lr_scale #设置空间学习速率缩放
-        fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda() # 
-        fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
-        features = torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
-        features[:, :3, 0 ] = fused_color
-        features[:, 3:, 1:] = 0.0
-
+        fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()  # 将点云数据转换为张量，并移动到 GPU 上
+        fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda()) # 将点云颜色数据转换为球谐函数表示，并移动到 GPU 上
+        features = torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda() # 初始化一个全零张量，用于存储特征
+        features[:, :3, 0 ] = fused_color # 将颜色数据填充到特征张量的前3个通道的第0个位置
+        features[:, 3:, 1:] = 0.0 # 将特征张量的第3个通道及其后的所有位置初始化为零，这些位置通常用于存储额外的特征信息。
+         # 打印初始点数量，需要对点云数量进行下采样，可以在此进行操作
         print("Number of points at initialisation : ", fused_point_cloud.shape[0])
-
+        # distCUDA2计算点云中每个点的最小距离，torch.clamp_min(..., 0.0000001) 将距离裁剪到最小值 0.0000001，避免距离为零或负值。
         dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
-        scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3)
-        rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
+        # [..., None].repeat(1, 3) 对得到的值进行扩展，以便与后续计算中的张量形状匹配。
+        scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3) #torch.sqrt(dist2) 计算距离的平方根。torch.log(...) 对计算出的距离取对数
+        rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")# 初始化旋转矩阵为单位四元数
         rots[:, 0] = 1
 
         opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
