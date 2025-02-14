@@ -30,16 +30,16 @@ except ImportError:
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
-    tb_writer = prepare_output_and_logger(dataset)
-    gaussians = GaussianModel(dataset.sh_degree)
-    scene = Scene(dataset, gaussians)
-    gaussians.training_setup(opt)
-    if checkpoint:
+    tb_writer = prepare_output_and_logger(dataset) # 准备输出文件夹和设置日志记录器
+    gaussians = GaussianModel(dataset.sh_degree)  # 初始化高斯模型， 输入的参数用来指定球谐函数的最大阶数
+    scene = Scene(dataset, gaussians)  # 初始化场景
+    gaussians.training_setup(opt) # 设置训练参数
+    if checkpoint:# 如果有检查点，加载检查点
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
 
-    bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
-    background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+    bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0] # 设置背景颜色
+    background = torch.tensor(bg_color, dtype=torch.float32, device="cuda") # 
 
     iter_start = torch.cuda.Event(enable_timing = True)
     iter_end = torch.cuda.Event(enable_timing = True)
@@ -130,9 +130,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
-
+# 准备输出文件夹和设置日志记录器
 def prepare_output_and_logger(args):    
-    if not args.model_path:
+    if not args.model_path: #model_path参数为空时，生成一个随机的uuid作为输出文件夹名
         if os.getenv('OAR_JOB_ID'):
             unique_str=os.getenv('OAR_JOB_ID')
         else:
@@ -192,30 +192,36 @@ def training_report(tb_writer, iteration, Ll1, loss, l1_loss, elapsed, testing_i
 
 if __name__ == "__main__":
     # Set up command line argument parser
-    parser = ArgumentParser(description="Training script parameters")
-    lp = ModelParams(parser)
-    op = OptimizationParams(parser)
-    pp = PipelineParams(parser)
+    parser = ArgumentParser(description="Training script parameters")#创建一个ArgumentParser对象，用于解析命令行参数。
+    lp = ModelParams(parser)#初始化与模型相关的参数
+    op = OptimizationParams(parser)#初始化与优化相关的参数。
+    pp = PipelineParams(parser)#初始化与数据处理管道相关的参数。
+    #一些具体的命令行参数
     parser.add_argument('--ip', type=str, default="127.0.0.1")
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
-    parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000, 30_000])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000, 30_000])
-    parser.add_argument("--quiet", action="store_true")
+    parser.add_argument('--detect_anomaly', action='store_true', default=False) # 默认为False，如果设置为True，则会在下面启用自动梯度检测异常功能
+    parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000,30_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000,30_000])
+    parser.add_argument("--quiet", action="store_true")# action="store_true"表示该参数是一个布尔值，如果在命令行中出现该参数，则将其值设置为True
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
-    args = parser.parse_args(sys.argv[1:])
-    args.save_iterations.append(args.iterations)
     
-    print("Optimizing " + args.model_path)
+    #parser.set_defaults(test_iterations=-1)
+    #parser.set_defaults(densification_interval=200)
+    args = parser.parse_args(sys.argv[1:])#从命令行参数中解析出用户输入的参数，并将这些参数存储在变量args中。若没有输入则用默认值
+    args.save_iterations.append(args.iterations)# 保存模型的迭代次数 ，args.iterations是训练的总迭代次数，默认是30000，保存7000，30000和所有
+    
+    print("Optimizing " + args.model_path)#只有这个输出没有时间戳
 
     # Initialize system state (RNG)
-    safe_state(args.quiet)
+    safe_state(args.quiet) # 通过重定向标准输出来为每个打印的行添加时间戳，
+    # 当提供 --quiet 参数时，代码将减少输出信息，可能用于日志记录或调试，避免过多的控制台输出干扰。
 
     # Start GUI server, configure and run training
-    network_gui.init(args.ip, args.port)
-    torch.autograd.set_detect_anomaly(args.detect_anomaly)
+    network_gui.init(args.ip, args.port) # 初始化一个 GUI 服务器，以便在训练过程中与外部 GUI 客户端进行通信，如果不需要 GUI 交互，可以注释掉
+    torch.autograd.set_detect_anomaly(args.detect_anomaly)#主要用于设置 PyTorch 的自动梯度检测异常功能。根据参数值决定是否开启。
+    # 该功能可以帮助我们定位代码中的梯度计算错误，并帮助我们修复这些错误。
     training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
 
     # All done

@@ -22,42 +22,44 @@ from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
 
 class GaussianModel:
-
+    #设置和初始化类中用于激活和逆激活的各种函数。这些函数将在其他方法中使用，以确保属性在访问和更新时能够正确地进行转换和处理。
     def setup_functions(self):
-        def build_covariance_from_scaling_rotation(scaling, scaling_modifier, rotation):
-            L = build_scaling_rotation(scaling_modifier * scaling, rotation)
-            actual_covariance = L @ L.transpose(1, 2)
-            symm = strip_symmetric(actual_covariance)
+        def build_covariance_from_scaling_rotation(scaling, scaling_modifier, rotation): # 根据给定的缩放参数、缩放修饰符和旋转参数来构建协方差矩阵。
+            L = build_scaling_rotation(scaling_modifier * scaling, rotation) # 构建缩放旋转矩阵
+            actual_covariance = L @ L.transpose(1, 2) # 计算实际的协方差矩阵, 即 L @ L.T, 这里的 @ 表示矩阵乘法。
+#L.transpose(1, 2) 表示对矩阵 L 进行转置操作。在这里，transpose(1, 2) 用于交换矩阵的第二维和第三维，这在三维矩阵中通常是指交换行和列。
+            symm = strip_symmetric(actual_covariance) #确保 actual_covariance 是对称的，并将其赋值给 symm。
             return symm
-        
-        self.scaling_activation = torch.exp
-        self.scaling_inverse_activation = torch.log
-
+        #缩放参数的激活函数和逆激活函数 对应的逆函数用于将原始参数转换为优化空间中的可学习参数
+        self.scaling_activation = torch.exp #指数函数，保证缩放参数始终为正
+        self.scaling_inverse_activation = torch.log #对数函数
+        # 构建协方差矩阵
         self.covariance_activation = build_covariance_from_scaling_rotation
+        # 不透明度参数的激活函数和逆激活函数
+        self.opacity_activation = torch.sigmoid #不透明度参数在正向传播时会被Sigmoid函数压缩到[0,1]区间
+        self.inverse_opacity_activation = inverse_sigmoid #不透明度参数在反向传播时会被反向Sigmoid函数进行变换
 
-        self.opacity_activation = torch.sigmoid
-        self.inverse_opacity_activation = inverse_sigmoid
-
-        self.rotation_activation = torch.nn.functional.normalize
-
-
+        self.rotation_activation = torch.nn.functional.normalize #旋转参数在正向传播时会被归一化，确保旋转四元数保持单位长度
+        # torch.nn.functional.normalize 通常用于归一化向量而不是旋转矩阵，如果要确保旋转矩阵的有效性，可能还需要额外的处理步骤来保证其正交性和行列式为1
+    # 初始化
     def __init__(self, sh_degree : int):
-        self.active_sh_degree = 0
-        self.max_sh_degree = sh_degree  
-        self._xyz = torch.empty(0)
+        self.active_sh_degree = 0  #球谐阶数 原始是0
+        self.max_sh_degree = sh_degree   #最大球谐阶数
+        # 存储不同信息的张量（tensor）
+        self._xyz = torch.empty(0) #空间位置
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
-        self._scaling = torch.empty(0)
-        self._rotation = torch.empty(0)
-        self._opacity = torch.empty(0)
+        self._scaling = torch.empty(0)  #椭球的形状尺度
+        self._rotation = torch.empty(0) #椭球的旋转
+        self._opacity = torch.empty(0)  #不透明度
         self.max_radii2D = torch.empty(0)
         self.xyz_gradient_accum = torch.empty(0)
         self.denom = torch.empty(0)
-        self.optimizer = None
-        self.percent_dense = 0
-        self.spatial_lr_scale = 0
-        self.setup_functions()
-
+        self.optimizer = None  #初始化优化器为 None。
+        self.percent_dense = 0  #初始化百分比密度为0。
+        self.spatial_lr_scale = 0 #初始化空间学习速率缩放为0。
+        self.setup_functions() #调用 setup_functions 方法设置各种激活和变换函数
+    # 返回模型参数
     def capture(self):
         return (
             self.active_sh_degree,
@@ -73,7 +75,7 @@ class GaussianModel:
             self.optimizer.state_dict(),
             self.spatial_lr_scale,
         )
-    
+    # 将 model_args 中的各种属性赋值给对象的相应属性，调用 training_setup 方法来设置训练相关的配置，并加载优化器的状态字典以恢复训练状态。
     def restore(self, model_args, training_args):
         (self.active_sh_degree, 
         self._xyz, 
@@ -91,7 +93,8 @@ class GaussianModel:
         self.xyz_gradient_accum = xyz_gradient_accum
         self.denom = denom
         self.optimizer.load_state_dict(opt_dict)
-
+    
+    # @property 装饰器用于将类的方法转换为属性（即可以通过 obj.method 的方式访问，而不需要使用 obj.method() 的形式）
     @property
     def get_scaling(self):
         return self.scaling_activation(self._scaling)
@@ -113,17 +116,17 @@ class GaussianModel:
     @property
     def get_opacity(self):
         return self.opacity_activation(self._opacity)
-    
+    # 计算协方差矩阵
     def get_covariance(self, scaling_modifier = 1):
         return self.covariance_activation(self.get_scaling, scaling_modifier, self._rotation)
-
+    # 更新球谐函数阶数
     def oneupSHdegree(self):
         if self.active_sh_degree < self.max_sh_degree:
             self.active_sh_degree += 1
-
+    # 从点云数据创建模型
     def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float):
-        self.spatial_lr_scale = spatial_lr_scale
-        fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
+        self.spatial_lr_scale = spatial_lr_scale #设置空间学习速率缩放
+        fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda() # 
         fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
         features = torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda()
         features[:, :3, 0 ] = fused_color
