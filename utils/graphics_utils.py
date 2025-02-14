@@ -8,12 +8,15 @@
 #
 # For inquiries contact  george.drettakis@inria.fr
 #
-
+#graphics_utils.py 文件
+#主要涉及点云、相机视图变换、投影矩阵以及视场角与焦距的转换等图形学基础操作。
+#它为处理三维几何变换和相机投影提供了必要的数学工具，
+#适用于计算机图形学、三维重建、计算机视觉等领域。
 import torch
 import math
 import numpy as np
 from typing import NamedTuple
-
+#基础点云对象，主要用于存储和操作点云数据
 class BasicPointCloud(NamedTuple):
     points : np.array
     colors : np.array

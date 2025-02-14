@@ -39,12 +39,14 @@ class Scene:
 
         self.train_cameras = {}
         self.test_cameras = {}
-
+        
+        # 检查是否存在 Colmap 格式的 sparse 文件夹
         if os.path.exists(os.path.join(args.source_path, "sparse")):
-            scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.eval)
+            scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.eval)# 调用 Colmap 场景加载函数，加载 Colmap 格式数据
+        # 检查是否存在 Blender 格式的 transforms_train.json 文件
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
-            print("Found transforms_train.json file, assuming Blender data set!")
-            scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval)
+            print("Found transforms_train.json file, assuming Blender data set!")  # 提示找到 Blender 格式数据
+            scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.eval) # 调用 Blender 场景加载函数，加载 Blender 格式数据
         else:
             assert False, "Could not recognize scene type!"
 
@@ -66,21 +68,21 @@ class Scene:
             random.shuffle(scene_info.train_cameras)  # Multi-res consistent random shuffling
             random.shuffle(scene_info.test_cameras)  # Multi-res consistent random shuffling
 
-        self.cameras_extent = scene_info.nerf_normalization["radius"]
+        self.cameras_extent = scene_info.nerf_normalization["radius"] #相机的范围也由scene_info返回
 
         for resolution_scale in resolution_scales:
             print("Loading Training Cameras")
             self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
             print("Loading Test Cameras")
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
-
+        #注意看这里，加载是什么情况
         if self.loaded_iter:
             self.gaussians.load_ply(os.path.join(self.model_path,
                                                            "point_cloud",
                                                            "iteration_" + str(self.loaded_iter),
                                                            "point_cloud.ply"))
-        else:
-            self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent)
+        else: #scene_info由前面 sceneLoadTypeCallbacks返回，包含点云，也有CameraInfo类对象，cameras_extent也由scene_info返回
+            self.gaussians.create_from_pcd(scene_info.point_cloud, self.cameras_extent) 
 
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
