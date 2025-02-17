@@ -32,11 +32,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset) # 准备输出文件夹和设置日志记录器
     gaussians = GaussianModel(dataset.sh_degree)  # 初始化高斯模型， 输入的参数用来指定球谐函数的最大阶数
-    scene = Scene(dataset, gaussians)  # 初始化场景
-    gaussians.training_setup(opt) # 设置训练参数
+    scene = Scene(dataset, gaussians)  # 初始化场景 #! gaussians是一个可变对象，在训练过程中会被修改，则scene中的gaussians也会被修改，因此检查点没有直接作用与scene
+    gaussians.training_setup(opt) # 设置训练参数，例如学习率，和前面初始化不冲突
     if checkpoint:# 如果有检查点，加载检查点
-        (model_params, first_iter) = torch.load(checkpoint)
-        gaussians.restore(model_params, opt)
+        (model_params, first_iter) = torch.load(checkpoint)  # 加载检查点，得到模型参数和迭代次数
+        gaussians.restore(model_params, opt) # 恢复模型参数和优化器状态，即OptimizationParams，优化参数
 
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0] # 设置背景颜色
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda") # 
@@ -204,8 +204,8 @@ if __name__ == "__main__":
     parser.add_argument("--test_iterations", nargs="+", type=int, default=[7_000,30_000])
     parser.add_argument("--save_iterations", nargs="+", type=int, default=[7_000,30_000])
     parser.add_argument("--quiet", action="store_true")# action="store_true"表示该参数是一个布尔值，如果在命令行中出现该参数，则将其值设置为True
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
-    parser.add_argument("--start_checkpoint", type=str, default = None)
+    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[]) # 保存检查点的迭代次数，默认为空
+    parser.add_argument("--start_checkpoint", type=str, default = None) # 开始训练的检查点，默认为空
     
     #parser.set_defaults(test_iterations=-1)
     #parser.set_defaults(densification_interval=200)

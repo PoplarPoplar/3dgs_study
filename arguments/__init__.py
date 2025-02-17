@@ -67,31 +67,34 @@ class ModelParams(ParamGroup):
 
 class PipelineParams(ParamGroup):
     def __init__(self, parser):
-        self.convert_SHs_python = False
-        self.compute_cov3D_python = False
-        self.debug = False
-        super().__init__(parser, "Pipeline Parameters")
+        self.convert_SHs_python = False  # 是否转换SHs，默认为False
+        self.compute_cov3D_python = False  # 是否计算3D协方差，默认为False
+        self.debug = False  # 是否启用调试模式，默认为False
+        super().__init__(parser, "Pipeline Parameters") # 调用父类的初始化方法，并传递 parser 和参数组名"Pipeline Parameters"
+
 
 class OptimizationParams(ParamGroup):
     def __init__(self, parser):
-        self.iterations = 30_00
-        self.position_lr_init = 0.00016
-        self.position_lr_final = 0.0000016
-        self.position_lr_delay_mult = 0.01
-        self.position_lr_max_steps = 30_000
-        self.feature_lr = 0.0025
-        self.opacity_lr = 0.05
-        self.scaling_lr = 0.005
-        self.rotation_lr = 0.001
-        self.percent_dense = 0.01
-        self.lambda_dssim = 0.2
-        self.densification_interval = 100
-        self.opacity_reset_interval = 3000
-        self.densify_from_iter = 500
-        self.densify_until_iter = 15_000
-        self.densify_grad_threshold = 0.0002
-        self.random_background = False
-        super().__init__(parser, "Optimization Parameters")
+        # 优化相关的参数初始化
+        self.iterations = 30_00  # 最大迭代次数，默认设置为30000次
+        self.position_lr_init = 0.00016  # 初始位置学习率，影响位置更新的步长
+        self.position_lr_final = 0.0000016  # 最终位置学习率，优化结束时的学习率
+        self.position_lr_delay_mult = 0.01  # 延迟因子，控制学习率衰减速度
+        self.position_lr_max_steps = 30_000  # 最大步数，位置优化的最大迭代步数
+        self.feature_lr = 0.0025  # 特征学习率，控制特征更新的步长
+        self.opacity_lr = 0.05  # 不透明度学习率，控制不透明度调整的步长
+        self.scaling_lr = 0.005  # 缩放学习率，控制缩放因子的调整步长
+        self.rotation_lr = 0.001  # 旋转学习率，控制旋转因子的调整步长
+        self.percent_dense = 0.01  # 稠密化的百分比，表示多少比例的数据用于稠密化
+        self.lambda_dssim = 0.2  # DSSIM损失函数的权重，影响损失函数的平衡
+        self.densification_interval = 100  # 稠密化间隔，控制每隔多少次迭代进行一次稠密化
+        self.opacity_reset_interval = 3000  # 不透明度重置间隔，控制每隔多少次迭代重置不透明度
+        self.densify_from_iter = 500  # 开始稠密化的迭代次数
+        self.densify_until_iter = 15_000  # 结束稠密化的迭代次数
+        self.densify_grad_threshold = 0.0002  # 稠密化梯度阈值，控制稠密化过程中的梯度变化
+        self.random_background = False  # 是否启用随机背景，控制背景的随机性
+        super().__init__(parser, "Optimization Parameters") # 调用父类的初始化方法，将parser和参数组名"Optimization Parameters"传递给父类
+
 
 def get_combined_args(parser : ArgumentParser):
     cmdlne_string = sys.argv[1:]

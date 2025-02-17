@@ -29,10 +29,10 @@ class Scene:
         self.model_path = args.model_path
         self.loaded_iter = None
         self.gaussians = gaussians
-
-        if load_iteration:
+        #load_iteration 和 loaded_iter 主要用于加载检查点
+        if load_iteration:# TODO: 这里的 load_iteration 什么时候会被执行？
             if load_iteration == -1:
-                self.loaded_iter = searchForMaxIteration(os.path.join(self.model_path, "point_cloud"))
+                self.loaded_iter = searchForMaxIteration(os.path.join(self.model_path, "point_cloud")) #在point_cloud文件夹中查找最大的迭代次数
             else:
                 self.loaded_iter = load_iteration
             print("Loading trained model at iteration {}".format(self.loaded_iter))
@@ -50,19 +50,20 @@ class Scene:
         else:
             assert False, "Could not recognize scene type!"
 
-        if not self.loaded_iter:
-            with open(scene_info.ply_path, 'rb') as src_file, open(os.path.join(self.model_path, "input.ply") , 'wb') as dest_file:
-                dest_file.write(src_file.read())
-            json_cams = []
-            camlist = []
-            if scene_info.test_cameras:
+        # 如果没有加载已有的模型（即 self.loaded_iter 为 None），则执行以下操作
+        if not self.loaded_iter: 
+            with open(scene_info.ply_path, 'rb') as src_file, open(os.path.join(self.model_path, "input.ply"), 'wb') as dest_file: # 打开场景信息中的点云文件，复制到结果路径下的 input.ply 文件中
+                dest_file.write(src_file.read())# 将源文件的内容写入目标文件，完成点云文件的复制
+            json_cams = []# 初始化一个空列表，用于存储相机信息的 JSON 格式数据
+            camlist = [] # 初始化一个空列表，用于存储所有的相机对象
+            if scene_info.test_cameras:# 如果场景信息中存在测试相机，则将它们添加到 camlist 列表中
                 camlist.extend(scene_info.test_cameras)
-            if scene_info.train_cameras:
+            if scene_info.train_cameras: # 如果场景信息中存在训练相机，则将它们添加到 camlist 列表中
                 camlist.extend(scene_info.train_cameras)
-            for id, cam in enumerate(camlist):
-                json_cams.append(camera_to_JSON(id, cam))
-            with open(os.path.join(self.model_path, "cameras.json"), 'w') as file:
-                json.dump(json_cams, file)
+            for id, cam in enumerate(camlist):# 遍历 camlist 中的每个相机对象，并将其转换为 JSON 格式
+                json_cams.append(camera_to_JSON(id, cam)) # 使用 camera_to_JSON 函数将相机信息转换为 JSON 格式，并添加到 json_cams 列表中
+            with open(os.path.join(self.model_path, "cameras.json"), 'w') as file:# 打开模型路径下的 cameras.json 文件，准备写入相机信息
+                json.dump(json_cams, file) # 将 json_cams 列表中的相机信息以 JSON 格式写入 cameras.json 文件
 
         if shuffle:
             random.shuffle(scene_info.train_cameras)  # Multi-res consistent random shuffling
@@ -75,9 +76,9 @@ class Scene:
             self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
             print("Loading Test Cameras")
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
-        #注意看这里，加载是什么情况
+        
         if self.loaded_iter:
-            self.gaussians.load_ply(os.path.join(self.model_path,
+            self.gaussians.load_ply(os.path.join(self.model_path,#TODO注意看这里，加载是什么情况
                                                            "point_cloud",
                                                            "iteration_" + str(self.loaded_iter),
                                                            "point_cloud.ply"))
@@ -93,3 +94,21 @@ class Scene:
 
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]
+    
+#1. load_iteration 参数
+#load_iteration 是一个传递给 Scene 类构造函数的参数，用于指定要加载的模型训练迭代次数。它的作用是根据指定的迭代次数加载已经训练好的模型。具体来说：
+#
+#load_iteration 为 None：表示不加载任何已经训练好的模型，而是从头开始初始化模型。
+#
+#load_iteration 为 -1：表示加载最新的（即最大迭代次数的）模型。代码会通过 searchForMaxIteration 函数在 point_cloud 文件夹中查找最大的迭代次数，并加载对应的模型。
+#
+#load_iteration 为一个具体的整数值：表示加载指定迭代次数的模型。
+#
+#2. loaded_iter 属性
+#loaded_iter 是 Scene 类的一个属性，用于存储实际加载的模型迭代次数。它的值根据 load_iteration 参数的不同而有所不同：
+#
+#如果 load_iteration 为 None，则 loaded_iter 也为 None，表示没有加载任何已经训练好的模型。
+#
+#如果 load_iteration 为 -1，则 loaded_iter 会被设置为 point_cloud 文件夹中最大的迭代次数。
+#
+#如果 load_iteration 为一个具体的整数值，则 loaded_iter 会被设置为该值。

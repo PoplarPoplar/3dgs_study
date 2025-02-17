@@ -76,23 +76,31 @@ class GaussianModel:
             self.spatial_lr_scale,
         )
     # 将 model_args 中的各种属性赋值给对象的相应属性，调用 training_setup 方法来设置训练相关的配置，并加载优化器的状态字典以恢复训练状态。
-    def restore(self, model_args, training_args):
-        (self.active_sh_degree, 
-        self._xyz, 
-        self._features_dc, 
-        self._features_rest,
-        self._scaling, 
-        self._rotation, 
-        self._opacity,
-        self.max_radii2D, 
-        xyz_gradient_accum, 
-        denom,
-        opt_dict, 
-        self.spatial_lr_scale) = model_args
-        self.training_setup(training_args)
-        self.xyz_gradient_accum = xyz_gradient_accum
-        self.denom = denom
-        self.optimizer.load_state_dict(opt_dict)
+    def restore(self, model_args, training_args):  #! 用于加载检查点
+        # 从 model_args 中解包出一系列模型参数和状态信息
+        (self.active_sh_degree,  # 活跃的SH度数
+        self._xyz,  # XYZ坐标
+        self._features_dc,  # 特征（深度图/纹理图）
+        self._features_rest,  # 其余特征
+        self._scaling,  # 缩放因子
+        self._rotation,  # 旋转因子
+        self._opacity,  # 不透明度
+        self.max_radii2D,  # 最大二维半径
+        xyz_gradient_accum,  # XYZ梯度累积值
+        denom,  # 分母，用于累积的归一化
+        opt_dict,  # 优化器的状态字典
+        self.spatial_lr_scale) = model_args  # 空间学习率的缩放因子
+
+        # 调用 training_setup 来设置训练过程中的参数
+        self.training_setup(training_args) #设置训练相关的配置，例如学习率。和前面解包赋值初始化不冲突。
+
+        # 恢复梯度累积值和分母
+        self.xyz_gradient_accum = xyz_gradient_accum  # 恢复之前保存的梯度累积值
+        self.denom = denom  # 恢复之前保存的分母
+
+        # 加载优化器的状态字典，恢复优化器的状态
+        self.optimizer.load_state_dict(opt_dict)  # 恢复优化器的状态，以便从中断处继续训练
+
     
     # @property 装饰器用于将类的方法转换为属性（即可以通过 obj.method 的方式访问，而不需要使用 obj.method() 的形式）
     @property
@@ -150,11 +158,15 @@ class GaussianModel:
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
-    def training_setup(self, training_args):
-        self.percent_dense = training_args.percent_dense
-        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-
+    def training_setup(self, training_args): # 设置训练相关的配置。例如学习率
+        # 从 training_args 获取稠密化百分比，并初始化相关变量
+        self.percent_dense = training_args.percent_dense  # 设置稠密化比例，用于控制训练时稠密化的程度
+        
+        # 初始化梯度积累变量，用于存储梯度累积
+        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")  # XYZ梯度累积
+        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")  # 分母，累积值
+        
+        # 为训练过程定义不同的优化器参数和学习率
         l = [
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
             {'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
@@ -163,12 +175,18 @@ class GaussianModel:
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"}
         ]
-
+        
+        # 使用Adam优化器来优化上述参数，学习率设置为0（后续通过调度器调整）
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
-        self.xyz_scheduler_args = get_expon_lr_func(lr_init=training_args.position_lr_init*self.spatial_lr_scale,
-                                                    lr_final=training_args.position_lr_final*self.spatial_lr_scale,
-                                                    lr_delay_mult=training_args.position_lr_delay_mult,
-                                                    max_steps=training_args.position_lr_max_steps)
+        
+        # 创建学习率调度器，根据训练参数调整位置学习率
+        self.xyz_scheduler_args = get_expon_lr_func(
+            lr_init=training_args.position_lr_init * self.spatial_lr_scale,  # 初始位置学习率
+            lr_final=training_args.position_lr_final * self.spatial_lr_scale,  # 最终位置学习率
+            lr_delay_mult=training_args.position_lr_delay_mult,  # 学习率延迟因子
+            max_steps=training_args.position_lr_max_steps  # 最大训练步骤数
+        )
+
 
     def update_learning_rate(self, iteration):
         ''' Learning rate scheduling per step '''
