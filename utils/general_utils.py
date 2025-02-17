@@ -15,7 +15,7 @@ from datetime import datetime
 import numpy as np
 import random
 
-def inverse_sigmoid(x):
+def inverse_sigmoid(x):# inverse_sigmoid 函数的作用是将一个介于 (0, 1) 范围内的值（通常是 sigmoid 函数的输出）转换回对应的实数值。
     return torch.log(x/(1-x))
 
 def PILtoTorch(pil_image, resolution):
@@ -25,41 +25,49 @@ def PILtoTorch(pil_image, resolution):
         return resized_image.permute(2, 0, 1)
     else:
         return resized_image.unsqueeze(dim=-1).permute(2, 0, 1)
-
+#该函数的主要目的是根据训练步数（step）动态调整学习率，从初始值 lr_init 衰减到最终值 lr_final。
+# 如果设置了延迟步骤 lr_delay_steps，则在训练的开始阶段，学习率会先延迟衰减，直到步数超过 lr_delay_steps 后，才开始使用正常的衰减方式。
 def get_expon_lr_func(
     lr_init, lr_final, lr_delay_steps=0, lr_delay_mult=1.0, max_steps=1000000
 ):
     """
-    Copied from Plenoxels
-
-    Continuous learning rate decay function. Adapted from JaxNeRF
-    The returned rate is lr_init when step=0 and lr_final when step=max_steps, and
-    is log-linearly interpolated elsewhere (equivalent to exponential decay).
-    If lr_delay_steps>0 then the learning rate will be scaled by some smooth
-    function of lr_delay_mult, such that the initial learning rate is
-    lr_init*lr_delay_mult at the beginning of optimization but will be eased back
-    to the normal learning rate when steps>lr_delay_steps.
-    :param conf: config subtree 'lr' or similar
-    :param max_steps: int, the number of steps during optimization.
-    :return HoF which takes step as input
+    生成一个连续的学习率衰减函数，适用于对数线性衰减。
+    参数:
+    - lr_init: 初始学习率
+    - lr_final: 最终学习率
+    - lr_delay_steps: 延迟步骤数，如果大于0则学习率会在前几步内保持较高，直到步数超过 lr_delay_steps 后才开始衰减
+    - lr_delay_mult: 延迟衰减时的学习率乘法因子，默认值为 1.0
+    - max_steps: 最大训练步骤数，决定衰减结束时的学习率
+    返回值: 一个函数 `helper(step)`，根据训练的当前步数调整学习率
     """
 
     def helper(step):
+        # 如果步数小于 0 或者初始化和最终学习率都为 0，则返回 0.0，表示该参数已禁用
         if step < 0 or (lr_init == 0.0 and lr_final == 0.0):
             # Disable this parameter
             return 0.0
+
+        # 如果设置了延迟衰减，则使用一个平滑的余弦函数来计算延迟的学习率
         if lr_delay_steps > 0:
-            # A kind of reverse cosine decay.
+            # 使用逆余弦衰减，使得训练开始时学习率较高，然后平滑过渡到目标学习率
             delay_rate = lr_delay_mult + (1 - lr_delay_mult) * np.sin(
                 0.5 * np.pi * np.clip(step / lr_delay_steps, 0, 1)
             )
         else:
+            # 如果没有设置延迟衰减，则学习率乘以 1（即无延迟）
             delay_rate = 1.0
+        
+        # 计算当前步数 t 的归一化值，t 从 0 到 1
         t = np.clip(step / max_steps, 0, 1)
+        
+        # 使用对数线性插值计算学习率：从 lr_init 到 lr_final
         log_lerp = np.exp(np.log(lr_init) * (1 - t) + np.log(lr_final) * t)
+        
+        # 返回调整后的学习率：乘以延迟因子和对数线性插值计算的学习率
         return delay_rate * log_lerp
 
     return helper
+
 
 def strip_lowerdiag(L):
     uncertainty = torch.zeros((L.shape[0], 6), dtype=torch.float, device="cuda")

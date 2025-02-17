@@ -85,7 +85,7 @@ class OptimizationParams(ParamGroup):
         self.opacity_lr = 0.05  # 不透明度学习率，控制不透明度调整的步长
         self.scaling_lr = 0.005  # 缩放学习率，控制缩放因子的调整步长
         self.rotation_lr = 0.001  # 旋转学习率，控制旋转因子的调整步长
-        self.percent_dense = 0.01  # 稠密化的百分比，表示多少比例的数据用于稠密化
+        self.percent_dense = 0.01  # 稠密化的百分比，表示多少比例的数据用于稠密化，模型会保留多少比例的高斯球（或点）来保持模型的细节和复杂性
         self.lambda_dssim = 0.2  # DSSIM损失函数的权重，影响损失函数的平衡
         self.densification_interval = 100  # 稠密化间隔，控制每隔多少次迭代进行一次稠密化
         self.opacity_reset_interval = 3000  # 不透明度重置间隔，控制每隔多少次迭代重置不透明度

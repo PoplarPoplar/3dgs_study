@@ -33,7 +33,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     tb_writer = prepare_output_and_logger(dataset) # 准备输出文件夹和设置日志记录器
     gaussians = GaussianModel(dataset.sh_degree)  # 初始化高斯模型， 输入的参数用来指定球谐函数的最大阶数
     scene = Scene(dataset, gaussians)  # 初始化场景 #! gaussians是一个可变对象，在训练过程中会被修改，则scene中的gaussians也会被修改，因此检查点没有直接作用与scene
-    gaussians.training_setup(opt) # 设置训练参数，例如学习率，和前面初始化不冲突
+    gaussians.training_setup(opt) # 设置训练参数，例如学习率，和前面初始化不冲突，且crear_from_pcd执行早于该函数,在scene实例化时会被调用
     if checkpoint:# 如果有检查点，加载检查点
         (model_params, first_iter) = torch.load(checkpoint)  # 加载检查点，得到模型参数和迭代次数
         gaussians.restore(model_params, opt) # 恢复模型参数和优化器状态，即OptimizationParams，优化参数

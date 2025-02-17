@@ -72,7 +72,7 @@ class GaussianModel:
             self.max_radii2D,
             self.xyz_gradient_accum,
             self.denom,
-            self.optimizer.state_dict(),
+            self.optimizer.state_dict(),#state_dict()是一个包含优化器当前状态的Python字典，它保存了优化器的所有信息
             self.spatial_lr_scale,
         )
     # 将 model_args 中的各种属性赋值给对象的相应属性，调用 training_setup 方法来设置训练相关的配置，并加载优化器的状态字典以恢复训练状态。
@@ -134,105 +134,134 @@ class GaussianModel:
     # 从点云数据创建模型
     def create_from_pcd(self, pcd : BasicPointCloud, spatial_lr_scale : float):
         self.spatial_lr_scale = spatial_lr_scale #设置空间学习速率缩放
-        fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()  #将点云数据转换为张量，并移动到 GPU 上,#!注意点云数据
+        fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()  #将点云数据转换为张量（tensor），并移动到 GPU 上,#!注意点云数据
         fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda()) #将点云颜色数据转换为球谐函数表示，并移动到 GPU 上
+        
+        # 随机选择点的数量，这里选择原始数量的一半
+        #num_points = fused_point_cloud.shape[0]
+        #new_num_points = num_points // 2
+        #indices = torch.randperm(num_points)[:new_num_points]
+        #fused_point_cloud = fused_point_cloud[indices]
+        #fused_color = fused_color[indices]
+        
         features = torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2)).float().cuda() # 初始化一个全零张量，用于存储特征
         features[:, :3, 0 ] = fused_color # 将颜色数据填充到特征张量的前3个通道的第0个位置
         features[:, 3:, 1:] = 0.0 # 将特征张量的第3个通道及其后的所有位置初始化为零，这些位置通常用于存储额外的特征信息。
-         # 打印初始点数量，需要对点云数量进行下采样，可以在此进行操作
+        # 打印初始点数量，需要对点云数量进行下采样，可以在此进行操作
         print("Number of points at initialisation : ", fused_point_cloud.shape[0])
         # distCUDA2计算点云中每个点的最小距离，torch.clamp_min(..., 0.0000001) 将距离裁剪到最小值 0.0000001，避免距离为零或负值。
         dist2 = torch.clamp_min(distCUDA2(torch.from_numpy(np.asarray(pcd.points)).float().cuda()), 0.0000001)
         # [..., None].repeat(1, 3) 对得到的值进行扩展，以便与后续计算中的张量形状匹配。
         scales = torch.log(torch.sqrt(dist2))[...,None].repeat(1, 3) #torch.sqrt(dist2) 计算距离的平方根。torch.log(...) 对计算出的距离取对数
-        rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")# 初始化旋转矩阵为单位四元数
-        rots[:, 0] = 1
+        rots = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")# 初始化旋转矩阵为单位四元数，行数为点云数量，列数为4，rots张量每一行是一个四元数。
+        rots[:, 0] = 1 # 单位四元数默认设置w=1，其余分量为0
 
-        opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))
-
-        self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
-        self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))
-        self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))
-        self._scaling = nn.Parameter(scales.requires_grad_(True))
-        self._rotation = nn.Parameter(rots.requires_grad_(True))
-        self._opacity = nn.Parameter(opacities.requires_grad_(True))
+        # 初始化不透明度参数：先将0.1通过逆sigmoid映射到优化空间，使sigmoid(opacity)初始值为0.1
+        opacities = inverse_sigmoid(0.1 * torch.ones((fused_point_cloud.shape[0], 1), dtype=torch.float, device="cuda"))#torch.ones创建一个填充了标量值 1 的张量
+        
+        # 将各属性包装为可训练参数并注册到模型
+        # nn.Parameter类用于将张量标记为模型参数，这样在训练过程中，这些参数可以通过反向传播来更新。
+        # requires_grad_(True)表示需要为这些参数计算梯度，从而在训练过程中进行优化。
+        self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))  # 3D坐标作为可优化参数，#!fused_point_cloud已经传给了_xyz
+        # 特征张量维度转换：[N,3,SH_coeffs] -> [N,SH_coeffs,3]，适配后续球谐函数计算(下面两行)
+        self._features_dc = nn.Parameter(features[:,:,0:1].transpose(1, 2).contiguous().requires_grad_(True))  # 零阶球谐系数（颜色基础分量）
+        self._features_rest = nn.Parameter(features[:,:,1:].transpose(1, 2).contiguous().requires_grad_(True))  # 高阶球谐系数（细节分量）
+        self._scaling = nn.Parameter(scales.requires_grad_(True))  # 高斯椭球的缩放参数
+        self._rotation = nn.Parameter(rots.requires_grad_(True))   # 高斯椭球的旋转参数（四元数）
+        self._opacity = nn.Parameter(opacities.requires_grad_(True))  # 不透明度参数（优化空间表示）
+        
+        # 初始化每个高斯在2D投影的最大半径为0（后续训练中更新）
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
-    def training_setup(self, training_args): # 设置训练相关的配置。例如学习率
+    def training_setup(self, training_args): # 设置训练相关的配置。例如学习率,arguments\__init__.py中OptimizationParams类。crear_from_pcd执行早于该函数，在scene实例化时会被调用
         # 从 training_args 获取稠密化百分比，并初始化相关变量
-        self.percent_dense = training_args.percent_dense  # 设置稠密化比例，用于控制训练时稠密化的程度
+        self.percent_dense = training_args.percent_dense  # 设置稠密化比例，用于控制训练时稠密化的程度，模型会保留多少比例的高斯球（或点）来保持模型的细节和复杂性
         
-        # 初始化梯度积累变量，用于存储梯度累积
+        # 初始化梯度积累变量，用于存储梯度累积 #?这里的self.get_xyz.shape[0]的数量，和create_from_pcd中的点云数量是一样的，且crear_from_pcd执行早于该函数
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")  # XYZ梯度累积
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")  # 分母，累积值
-        
+        #print("Number of self.get_xyz.shape[0] : ", self.get_xyz.shape[0])
         # 为训练过程定义不同的优化器参数和学习率
-        l = [
+        l = [ # 包含多个字典的列表，每个字典表示一个优化器的参数组，
             {'params': [self._xyz], 'lr': training_args.position_lr_init * self.spatial_lr_scale, "name": "xyz"},
             {'params': [self._features_dc], 'lr': training_args.feature_lr, "name": "f_dc"},
             {'params': [self._features_rest], 'lr': training_args.feature_lr / 20.0, "name": "f_rest"},
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"}
-        ]
-        
+        ]#'params': 这个键对应的是一个包含模型参数的列表。优化器将会对这些参数进行优化。
+        #'lr': 每个参数组的学习率设置。这里不同参数组的学习率有不同的初始值，这取决于 training_args 中的配置。
+        #'name': 每个参数组的名称，主要用于调试和记录，帮助识别和跟踪不同的参数组。
+
         # 使用Adam优化器来优化上述参数，学习率设置为0（后续通过调度器调整）
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
         
         # 创建学习率调度器，根据训练参数调整位置学习率
-        self.xyz_scheduler_args = get_expon_lr_func(
+        self.xyz_scheduler_args = get_expon_lr_func( #得到了一个函数
             lr_init=training_args.position_lr_init * self.spatial_lr_scale,  # 初始位置学习率
             lr_final=training_args.position_lr_final * self.spatial_lr_scale,  # 最终位置学习率
             lr_delay_mult=training_args.position_lr_delay_mult,  # 学习率延迟因子
             max_steps=training_args.position_lr_max_steps  # 最大训练步骤数
-        )
-
+        )#学习率调度器的作用是帮助模型在训练过程中逐步降低学习率，避免训练初期的过快收敛或训练后期的振荡，从而使模型更稳定地收敛。
 
     def update_learning_rate(self, iteration):
         ''' Learning rate scheduling per step '''
-        for param_group in self.optimizer.param_groups:
-            if param_group["name"] == "xyz":
-                lr = self.xyz_scheduler_args(iteration)
-                param_group['lr'] = lr
+        for param_group in self.optimizer.param_groups:# 遍历优化器中的所有参数组,即上面 l
+            if param_group["name"] == "xyz":## 找到名称为 "xyz" 的参数组
+                lr = self.xyz_scheduler_args(iteration) # 调用学习率调度器，得到当前位置学习率
+                param_group['lr'] = lr # 更新该参数组的学习率
                 return lr
-
+            
+    #construct_list_of_attributes 函数的作用是构建一个包含所有模型属性的列表。这些属性包括：
+    #位置（x, y, z）、法线（nx, ny, nz）、零阶球谐系数（DC分量）、高阶球谐系数、不透明度缩放参数、旋转参数
+    #这个列表通常用于保存模型数据到文件（如PLY文件）时，定义文件中每个点的属性字段。
     def construct_list_of_attributes(self):
+        # 初始化一个列表，包含基本的几何属性：位置 (x, y, z) 和法线 (nx, ny, nz)
         l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
-        # All channels except the 3 DC
-        for i in range(self._features_dc.shape[1]*self._features_dc.shape[2]):
-            l.append('f_dc_{}'.format(i))
-        for i in range(self._features_rest.shape[1]*self._features_rest.shape[2]):
-            l.append('f_rest_{}'.format(i))
-        l.append('opacity')
-        for i in range(self._scaling.shape[1]):
-            l.append('scale_{}'.format(i))
-        for i in range(self._rotation.shape[1]):
-            l.append('rot_{}'.format(i))
+        # 添加零阶球谐系数（DC分量）的特征名称
+        # self._features_dc.shape[1] 是特征的数量（通常为3，对应RGB颜色）
+        # self._features_dc.shape[2] 是球谐系数的数量（通常为1，因为DC分量只有一个）
+        for i in range(self._features_dc.shape[1] * self._features_dc.shape[2]):
+            l.append('f_dc_{}'.format(i))  # 例如：f_dc_0, f_dc_1, f_dc_2
+        # 添加高阶球谐系数的特征名称
+        # self._features_rest.shape[1] 是特征的数量（通常为3，对应RGB颜色）
+        # self._features_rest.shape[2] 是球谐系数的数量（通常为 (max_sh_degree + 1)^2 - 1，因为DC分量已经单独处理）
+        for i in range(self._features_rest.shape[1] * self._features_rest.shape[2]):
+            l.append('f_rest_{}'.format(i))  # 例如：f_rest_0, f_rest_1, ...
+        l.append('opacity')# 添加不透明度属性
+        # 添加缩放参数的属性名称
+        for i in range(self._scaling.shape[1]):# self._scaling.shape[1] 是缩放参数的数量（通常为3，对应x, y, z三个方向的缩放）
+            l.append('scale_{}'.format(i))  # 例如：scale_0, scale_1, scale_2
+        # 添加旋转参数的属性名称
+        for i in range(self._rotation.shape[1]):# self._rotation.shape[1] 是旋转参数的数量（通常为4，对应四元数的四个分量）
+            l.append('rot_{}'.format(i))  # 例如：rot_0, rot_1, rot_2, rot_3
         return l
 
     def save_ply(self, path):
-        mkdir_p(os.path.dirname(path))
+        mkdir_p(os.path.dirname(path))  # 确保保存路径的目录存在
 
-        xyz = self._xyz.detach().cpu().numpy()
-        normals = np.zeros_like(xyz)
-        f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
-        f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
-        opacities = self._opacity.detach().cpu().numpy()
-        scale = self._scaling.detach().cpu().numpy()
-        rotation = self._rotation.detach().cpu().numpy()
+        xyz = self._xyz.detach().cpu().numpy()  # 获取 3D 坐标 (xyz)，从计算图中分离，移动到 CPU，并转换为 numpy 数组
+        normals = np.zeros_like(xyz)  # 初始化法线为与 xyz 相同形状的全零数组
+        f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()  # 将 _features_dc 转换为 numpy 数组，并做适当的转置和扁平化处理
+        f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()  # 同样处理 _features_rest 数据
+        opacities = self._opacity.detach().cpu().numpy()  # 将透明度数据转换为 numpy 数组
+        scale = self._scaling.detach().cpu().numpy()  # 将缩放数据转换为 numpy 数组
+        rotation = self._rotation.detach().cpu().numpy()  # 将旋转数据转换为 numpy 数组
+        # 使用了上面定义的 construct_list_of_attributes 函数，构造了一个包含所有模型属性的列表
+        dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]  # 定义每个属性的数据类型，都是 'f4' 类型（32 位浮点数）
 
-        dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
+        elements = np.empty(xyz.shape[0], dtype=dtype_full)  # 创建一个空的结构化 numpy 数组用于存储顶点数据
+        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)  # 将所有属性数据按列拼接
+        # 不同行是不同点的数据。每一行中的数据顺序是一致的，例如第一行中的所有属性都是对应第一个点的，第二行中的所有属性都是对应第二个点的
+        elements[:] = list(map(tuple, attributes))  # 将拼接后的属性数据赋值给元素数组
+        el = PlyElement.describe(elements, 'vertex')  # 创建 PlyElement 对象，描述这些数据为 'vertex'（顶点数据）
+        PlyData([el]).write(path)  # 将 PlyData（顶点数据）写入指定路径的 .ply 文件
 
-        elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
-        elements[:] = list(map(tuple, attributes))
-        el = PlyElement.describe(elements, 'vertex')
-        PlyData([el]).write(path)
-
+    #对当前透明度值进行一些约束（确保最小值不小于 0.01），然后使用反 sigmoid 函数进行变换，接着将新的透明度值传入优化器
     def reset_opacity(self):
-        opacities_new = inverse_sigmoid(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))
-        optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
-        self._opacity = optimizable_tensors["opacity"]
+        opacities_new = inverse_sigmoid(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))  # 确保透明度值不小于0.01并进行反sigmoid变换
+        optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")  # 将更新后的透明度值传递给优化器
+        self._opacity = optimizable_tensors["opacity"]  # 更新对象的 _opacity 属性，保存优化后的透明度值
 
     def load_ply(self, path):
         plydata = PlyData.read(path)
@@ -276,21 +305,22 @@ class GaussianModel:
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
 
         self.active_sh_degree = self.max_sh_degree
-
+    #替换优化器中的某个参数并重新初始化与该参数相关的优化器状态（如动量和平方动量），使得新的张量能够顺利参与训练。
+    # 这个函数通常用于动态更新模型的某些参数，并确保优化器能够正确处理这些新参数。
     def replace_tensor_to_optimizer(self, tensor, name):
-        optimizable_tensors = {}
-        for group in self.optimizer.param_groups:
-            if group["name"] == name:
-                stored_state = self.optimizer.state.get(group['params'][0], None)
-                stored_state["exp_avg"] = torch.zeros_like(tensor)
-                stored_state["exp_avg_sq"] = torch.zeros_like(tensor)
+        optimizable_tensors = {}  # 初始化字典，用于存储替换后的优化器参数
+        for group in self.optimizer.param_groups:  # 遍历优化器中的所有参数组
+            if group["name"] == name:  # 如果找到名字匹配的参数组
+                stored_state = self.optimizer.state.get(group['params'][0], None)  # 获取当前参数的优化器状态
+                stored_state["exp_avg"] = torch.zeros_like(tensor)  # 初始化动量（exp_avg）为零张量
+                stored_state["exp_avg_sq"] = torch.zeros_like(tensor)  # 初始化平方动量（exp_avg_sq）为零张量
 
-                del self.optimizer.state[group['params'][0]]
-                group["params"][0] = nn.Parameter(tensor.requires_grad_(True))
-                self.optimizer.state[group['params'][0]] = stored_state
+                del self.optimizer.state[group['params'][0]]  # 删除旧的优化器状态
+                group["params"][0] = nn.Parameter(tensor.requires_grad_(True))  # 用新的张量替换旧的参数，确保其可训练
+                self.optimizer.state[group['params'][0]] = stored_state  # 将新的参数状态添加回优化器
 
-                optimizable_tensors[group["name"]] = group["params"][0]
-        return optimizable_tensors
+                optimizable_tensors[group["name"]] = group["params"][0]  # 将更新后的参数添加到字典中
+        return optimizable_tensors  # 返回包含替换后的所有优化器参数的字典
 
     def _prune_optimizer(self, mask):
         optimizable_tensors = {}
