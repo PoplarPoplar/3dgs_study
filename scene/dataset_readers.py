@@ -91,7 +91,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
         R = np.transpose(qvec2rotmat(extr.qvec))  # 将四元数转换为旋转矩阵，并转置
         T = np.array(extr.tvec)  # 将平移向量转换为 NumPy 数组
 
-        if intr.model == "SIMPLE_PINHOLE":
+        if intr.model == "SIMPLE_PINHOLE":#相机模型只支持SIMPLE_PINHOLE和PINHOLE两种
             focal_length_x = intr.params[0]
             FovY = focal2fov(focal_length_x, height)  # 计算垂直视场角
             FovX = focal2fov(focal_length_x, width)  # 计算水平视场角

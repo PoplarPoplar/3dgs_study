@@ -77,8 +77,8 @@ class Scene:
             print("Loading Test Cameras")
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
         
-        if self.loaded_iter:
-            self.gaussians.load_ply(os.path.join(self.model_path,#TODO注意看这里，加载是什么情况
+        if self.loaded_iter:#下面的load_ply函数加载的是高斯点云ply
+            self.gaussians.load_ply(os.path.join(self.model_path,#TODO注意看这里，加载是什么情况,什么时候会被执行
                                                            "point_cloud",
                                                            "iteration_" + str(self.loaded_iter),
                                                            "point_cloud.ply"))

@@ -263,48 +263,60 @@ class GaussianModel:
         optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")  # 将更新后的透明度值传递给优化器
         self._opacity = optimizable_tensors["opacity"]  # 更新对象的 _opacity 属性，保存优化后的透明度值
 
+    # 从PLY文件加载3D高斯点云数据，包括坐标、不透明度、球谐函数系数、缩放和旋转参数，并将其转换为PyTorch可训练参数
     def load_ply(self, path):
+        # 读取PLY文件数据
         plydata = PlyData.read(path)
 
+        # 提取XYZ坐标并堆叠为[N,3]数组
         xyz = np.stack((np.asarray(plydata.elements[0]["x"]),
                         np.asarray(plydata.elements[0]["y"]),
                         np.asarray(plydata.elements[0]["z"])),  axis=1)
+        # 提取不透明度并增加维度为[N,1]
         opacities = np.asarray(plydata.elements[0]["opacity"])[..., np.newaxis]
 
+        # 构建球谐函数DC项特征 [N,3,1]
         features_dc = np.zeros((xyz.shape[0], 3, 1))
-        features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])
-        features_dc[:, 1, 0] = np.asarray(plydata.elements[0]["f_dc_1"])
-        features_dc[:, 2, 0] = np.asarray(plydata.elements[0]["f_dc_2"])
+        features_dc[:, 0, 0] = np.asarray(plydata.elements[0]["f_dc_0"])  # 填充R通道
+        features_dc[:, 1, 0] = np.asarray(plydata.elements[0]["f_dc_1"])  # 填充G通道
+        features_dc[:, 2, 0] = np.asarray(plydata.elements[0]["f_dc_2"])  # 填充B通道
 
+        # 提取高频球谐系数(f_rest_*属性)
         extra_f_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("f_rest_")]
-        extra_f_names = sorted(extra_f_names, key = lambda x: int(x.split('_')[-1]))
-        assert len(extra_f_names)==3*(self.max_sh_degree + 1) ** 2 - 3
-        features_extra = np.zeros((xyz.shape[0], len(extra_f_names)))
-        for idx, attr_name in enumerate(extra_f_names):
+        extra_f_names = sorted(extra_f_names, key=lambda x: int(x.split('_')[-1]))  # 按数字排序
+        assert len(extra_f_names)==3*(self.max_sh_degree + 1) ** 2 - 3  # 验证球谐系数数量
+        features_extra = np.zeros((xyz.shape[0], len(extra_f_names)))    # 初始化数组[N, F]
+        for idx, attr_name in enumerate(extra_f_names):                 # 逐列填充数据
             features_extra[:, idx] = np.asarray(plydata.elements[0][attr_name])
-        # Reshape (P,F*SH_coeffs) to (P, F, SH_coeffs except DC)
-        features_extra = features_extra.reshape((features_extra.shape[0], 3, (self.max_sh_degree + 1) ** 2 - 1))
+        features_extra = features_extra.reshape((features_extra.shape[0], 3, 
+                                                (self.max_sh_degree + 1) ** 2 - 1))  # 重构为[N,3,SH_coeffs]
 
+        # 提取缩放参数(scale_0~scale_2)
         scale_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("scale_")]
-        scale_names = sorted(scale_names, key = lambda x: int(x.split('_')[-1]))
-        scales = np.zeros((xyz.shape[0], len(scale_names)))
-        for idx, attr_name in enumerate(scale_names):
+        scale_names = sorted(scale_names, key=lambda x: int(x.split('_')[-1]))  # 按数字排序
+        scales = np.zeros((xyz.shape[0], len(scale_names)))                     # 初始化[N,3]
+        for idx, attr_name in enumerate(scale_names):                           # 填充缩放参数
             scales[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
+        # 提取旋转参数(rot_0~rot_3)
         rot_names = [p.name for p in plydata.elements[0].properties if p.name.startswith("rot")]
-        rot_names = sorted(rot_names, key = lambda x: int(x.split('_')[-1]))
-        rots = np.zeros((xyz.shape[0], len(rot_names)))
-        for idx, attr_name in enumerate(rot_names):
+        rot_names = sorted(rot_names, key=lambda x: int(x.split('_')[-1]))     # 按数字排序
+        rots = np.zeros((xyz.shape[0], len(rot_names)))                        # 初始化[N,4]
+        for idx, attr_name in enumerate(rot_names):                           # 填充旋转参数
             rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
-        self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
-        self._features_rest = nn.Parameter(torch.tensor(features_extra, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
-        self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
-        self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
+        # 将数据转换为CUDA张量并注册为可训练参数
+        self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))  # 坐标参数
+        self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device="cuda")
+                            .transpose(1, 2).contiguous().requires_grad_(True))  # DC特征[1,3,N]
+        self._features_rest = nn.Parameter(torch.tensor(features_extra, dtype=torch.float, device="cuda")
+                            .transpose(1, 2).contiguous().requires_grad_(True))  # 高频特征[SH_coeffs,3,N]
+        self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))  # 不透明度
+        self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))    # 缩放参数
+        self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))     # 旋转参数
 
-        self.active_sh_degree = self.max_sh_degree
+        self.active_sh_degree = self.max_sh_degree  # 设置当前球谐函数最大阶数
+
     #替换优化器中的某个参数并重新初始化与该参数相关的优化器状态（如动量和平方动量），使得新的张量能够顺利参与训练。
     # 这个函数通常用于动态更新模型的某些参数，并确保优化器能够正确处理这些新参数。
     def replace_tensor_to_optimizer(self, tensor, name):
@@ -323,80 +335,115 @@ class GaussianModel:
         return optimizable_tensors  # 返回包含替换后的所有优化器参数的字典
 
     def _prune_optimizer(self, mask):
-        optimizable_tensors = {}
-        for group in self.optimizer.param_groups:
-            stored_state = self.optimizer.state.get(group['params'][0], None)
-            if stored_state is not None:
-                stored_state["exp_avg"] = stored_state["exp_avg"][mask]
-                stored_state["exp_avg_sq"] = stored_state["exp_avg_sq"][mask]
+        """根据mask剪枝优化器参数，同步更新优化器状态，返回剪枝后的参数集合"""
+        optimizable_tensors = {}  # 初始化剪枝后的参数字典
+        for group in self.optimizer.param_groups:  # 遍历每个参数组
+            stored_state = self.optimizer.state.get(group['params'][0], None)  # 获取参数状态
+            if stored_state is not None:  # 处理有优化器状态的参数（如Adam）
+                # 剪裁动量缓冲区
+                stored_state["exp_avg"] = stored_state["exp_avg"][mask]  # 一阶动量剪枝 保留mask=True的条目
+                stored_state["exp_avg_sq"] = stored_state["exp_avg_sq"][mask]  # 二阶动量剪枝
 
-                del self.optimizer.state[group['params'][0]]
-                group["params"][0] = nn.Parameter((group["params"][0][mask].requires_grad_(True)))
-                self.optimizer.state[group['params'][0]] = stored_state
-
-                optimizable_tensors[group["name"]] = group["params"][0]
-            else:
-                group["params"][0] = nn.Parameter(group["params"][0][mask].requires_grad_(True))
-                optimizable_tensors[group["name"]] = group["params"][0]
-        return optimizable_tensors
+                del self.optimizer.state[group['params'][0]]  # 删除旧参数状态
+                # 创建剪枝后的新参数
+                group["params"][0] = nn.Parameter(group["params"][0][mask].requires_grad_(True)) #!requires_grad_()的作用是设置张量的梯度跟踪,并以原地操作（in-place）修改张量的属性。。
+                self.optimizer.state[group['params'][0]] = stored_state  # 绑定新参数与状态
+                optimizable_tensors[group["name"]] = group["params"][0]  # 记录剪枝参数  存储剪枝后的参数
+            else:  # 处理无状态的参数
+                group["params"][0] = nn.Parameter(group["params"][0][mask].requires_grad_(True)) #requires_grad 是查看张量是否需计算梯度的属性，而 requires_grad_() 是原地修改该属性并返回张量的方法。
+                optimizable_tensors[group["name"]] = group["params"][0]  # 直接记录参数
+        return optimizable_tensors  # 返回所有剪枝后的可优化参数
 
     def prune_points(self, mask):
-        valid_points_mask = ~mask
-        optimizable_tensors = self._prune_optimizer(valid_points_mask)
+            """根据掩码剔除无效高斯点，更新模型参数与优化状态，维护训练连续性"""
+            valid_points_mask = ~mask  # 反转掩码，获取有效点标记(True表示保留)
+            optimizable_tensors = self._prune_optimizer(valid_points_mask)  # 调用优化器剪枝核心方法
 
-        self._xyz = optimizable_tensors["xyz"]
-        self._features_dc = optimizable_tensors["f_dc"]
-        self._features_rest = optimizable_tensors["f_rest"]
-        self._opacity = optimizable_tensors["opacity"]
-        self._scaling = optimizable_tensors["scaling"]
-        self._rotation = optimizable_tensors["rotation"]
+            # 更新所有参数到剪枝后的版本
+            self._xyz = optimizable_tensors["xyz"]  # 3D坐标 [N,3]
+            self._features_dc = optimizable_tensors["f_dc"]  # 颜色主成分 [N,1,3]
+            self._features_rest = optimizable_tensors["f_rest"]  # 颜色残差 [N,15,3]
+            self._opacity = optimizable_tensors["opacity"]  # 透明度 [N,1]
+            self._scaling = optimizable_tensors["scaling"]  # 缩放因子 [N,3]
+            self._rotation = optimizable_tensors["rotation"]  # 旋转四元数 [N,4]
 
-        self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
-
-        self.denom = self.denom[valid_points_mask]
-        self.max_radii2D = self.max_radii2D[valid_points_mask]
+            # 更新梯度累积缓冲区
+            self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]  # 坐标梯度累积量
+            
+            # 更新优化相关状态量
+            self.denom = self.denom[valid_points_mask]    # 分母累计量(用于自适应控制)
+            self.max_radii2D = self.max_radii2D[valid_points_mask]  # 2D投影最大半径(用于剔除退化点)
 
     def cat_tensors_to_optimizer(self, tensors_dict):
-        optimizable_tensors = {}
-        for group in self.optimizer.param_groups:
-            assert len(group["params"]) == 1
-            extension_tensor = tensors_dict[group["name"]]
+        """
+        动态扩展优化器管理的可训练参数，实现参数维度增长。主要功能：
+        1. 参数扩展 - 将新张量(tensors_dict)拼接到现有参数末尾
+        2. 状态初始化 - 对自适应优化器(如Adam)的动量缓冲区进行零值填充
+        3. 梯度激活 - 确保新增参数参与反向传播计算
+        4. 拓扑维护 - 保持参数组名称与张量的映射关系
+        
+        典型应用场景：3D高斯中新增高斯点：
+        - 当场景重建发现未覆盖区域时动态创建新点
+        - 克隆现有高斯点实现细节增强时的参数复制
+
+        参数变化示例：
+        原始参数形状: [N, D] + 新增形状: [M, D] => 合并后: [N+M, D]
+        """
+        optimizable_tensors = {}                          # 存储扩展后的可优化参数
+        for group in self.optimizer.param_groups:         # 遍历优化器参数组
+            assert len(group["params"]) == 1              # 确保每组仅一个参数张量
+            extension_tensor = tensors_dict[group["name"]] # 获取待扩展的新参数
             stored_state = self.optimizer.state.get(group['params'][0], None)
-            if stored_state is not None:
+            if stored_state is not None:                  # 处理有优化器状态的参数组
+                # 扩展动量缓冲区
+                stored_state["exp_avg"] = torch.cat((stored_state["exp_avg"], torch.zeros_like(extension_tensor)), dim=0)  # 一阶动量扩展
+                stored_state["exp_avg_sq"] = torch.cat((stored_state["exp_avg_sq"], torch.zeros_like(extension_tensor)), dim=0)  # 二阶动量扩展
 
-                stored_state["exp_avg"] = torch.cat((stored_state["exp_avg"], torch.zeros_like(extension_tensor)), dim=0)
-                stored_state["exp_avg_sq"] = torch.cat((stored_state["exp_avg_sq"], torch.zeros_like(extension_tensor)), dim=0)
-
-                del self.optimizer.state[group['params'][0]]
-                group["params"][0] = nn.Parameter(torch.cat((group["params"][0], extension_tensor), dim=0).requires_grad_(True))
-                self.optimizer.state[group['params'][0]] = stored_state
-
-                optimizable_tensors[group["name"]] = group["params"][0]
-            else:
-                group["params"][0] = nn.Parameter(torch.cat((group["params"][0], extension_tensor), dim=0).requires_grad_(True))
-                optimizable_tensors[group["name"]] = group["params"][0]
-
-        return optimizable_tensors
+                del self.optimizer.state[group['params'][0]]              # 删除旧参数状态
+                group["params"][0] = nn.Parameter(torch.cat((group["params"][0], extension_tensor), dim=0).requires_grad_(True))  # 连接新旧参数
+                self.optimizer.state[group['params'][0]] = stored_state   # 绑定新参数与状态
+                optimizable_tensors[group["name"]] = group["params"][0]   # 记录扩展参数
+            else:                               # 无优化器状态时的处理（如初始化阶段）
+                group["params"][0] = nn.Parameter(torch.cat((group["params"][0], extension_tensor), dim=0).requires_grad_(True))  # 直接连接参数
+                optimizable_tensors[group["name"]] = group["params"][0]   # 记录新参数
+        return optimizable_tensors              # 返回扩展后的参数集合
 
     def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation):
-        d = {"xyz": new_xyz,
-        "f_dc": new_features_dc,
-        "f_rest": new_features_rest,
-        "opacity": new_opacities,
-        "scaling" : new_scaling,
-        "rotation" : new_rotation}
+        """
+        高斯点增密后处理：将新点参数注入优化系统并重置训练状态
+        
+        功能：
+        1. 合并参数 - 将新点坐标/颜色/透明度等参数拼接到现有参数末尾
+        2. 状态初始化 - 重置新增点的梯度累积量和自适应优化参数
+        3. 数据对齐 - 保持模型参数与优化器参数的严格一致性
+        
+        应用场景：
+        - 克隆高方差高斯点以增强表面细节
+        - 在重建缺失区域插入新点修补空洞
+        
+        注意：需与prune_points配合使用以控制点云规模，调用前应确保新点参数已正确初始化
+        """
+        # 组织新点参数为字典，键名对应优化器参数组名称
+        d = {"xyz": new_xyz,                    # 新点坐标 [M,3]
+            "f_dc": new_features_dc,            # 新点颜色主成分 [M,1,3]
+            "f_rest": new_features_rest,        # 新点颜色残差 [M,15,3]
+            "opacity": new_opacities,           # 新点透明度 [M,1]
+            "scaling" : new_scaling,            # 新点缩放因子 [M,3]
+            "rotation" : new_rotation}          # 新点旋转四元数 [M,4]
 
-        optimizable_tensors = self.cat_tensors_to_optimizer(d)
-        self._xyz = optimizable_tensors["xyz"]
-        self._features_dc = optimizable_tensors["f_dc"]
-        self._features_rest = optimizable_tensors["f_rest"]
-        self._opacity = optimizable_tensors["opacity"]
-        self._scaling = optimizable_tensors["scaling"]
-        self._rotation = optimizable_tensors["rotation"]
+        optimizable_tensors = self.cat_tensors_to_optimizer(d)  # 将新点参数合并到优化器
+        # 更新模型参数到合并后的版本
+        self._xyz = optimizable_tensors["xyz"]                  # 合并坐标 [N+M,3]
+        self._features_dc = optimizable_tensors["f_dc"]         # 合并颜色主成分
+        self._features_rest = optimizable_tensors["f_rest"]     # 合并颜色残差
+        self._opacity = optimizable_tensors["opacity"]          # 合并透明度
+        self._scaling = optimizable_tensors["scaling"]          # 合并缩放因子
+        self._rotation = optimizable_tensors["rotation"]        # 合并旋转参数
 
-        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
-        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+        # 重置新增点的训练状态
+        self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")  # 梯度累积归零
+        self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")               # 分母累计量归零
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")            # 投影半径重置
 
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
         n_init_points = self.get_xyz.shape[0]
