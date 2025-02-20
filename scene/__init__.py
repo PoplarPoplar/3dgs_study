@@ -62,7 +62,7 @@ class Scene:
                 camlist.extend(scene_info.train_cameras)
             for id, cam in enumerate(camlist):# 遍历 camlist 中的每个相机对象，并将其转换为 JSON 格式
                 json_cams.append(camera_to_JSON(id, cam)) # 使用 camera_to_JSON 函数将相机信息转换为 JSON 格式，并添加到 json_cams 列表中
-            with open(os.path.join(self.model_path, "cameras.json"), 'w') as file:# 打开模型路径下的 cameras.json 文件，准备写入相机信息
+            with open(os.path.join(self.model_path, "cameras.json"), 'w') as file:# 打开结果路径下的 cameras.json 文件，准备写入相机信息
                 json.dump(json_cams, file) # 将 json_cams 列表中的相机信息以 JSON 格式写入 cameras.json 文件
 
         if shuffle:
@@ -71,12 +71,21 @@ class Scene:
 
         self.cameras_extent = scene_info.nerf_normalization["radius"] #相机的范围也由scene_info返回
 
+        # 遍历所有预设的分辨率缩放比例（用于多尺度训练/测试）
         for resolution_scale in resolution_scales:
+            # --------------- 加载训练集相机数据 ---------------
             print("Loading Training Cameras")
+            # 根据当前分辨率缩放比例，从场景信息中生成训练相机列表
+            # scene_info.train_cameras：包含原始相机参数（位置、旋转、内参等）
+            # resolution_scale：分辨率缩放因子（例如 0.5 表示降采样到一半分辨率）
+            # args：可能包含数据路径、图像尺寸限制等参数
             self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
+
+            # --------------- 加载测试集相机数据 ---------------
             print("Loading Test Cameras")
+            # 同理生成测试集相机列表，结构与训练集一致
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args)
-        
+
         if self.loaded_iter:#下面的load_ply函数加载的是高斯点云ply
             self.gaussians.load_ply(os.path.join(self.model_path,#TODO注意看这里，加载是什么情况,什么时候会被执行
                                                            "point_cloud",
@@ -90,7 +99,7 @@ class Scene:
         self.gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))
 
     def getTrainCameras(self, scale=1.0):
-        return self.train_cameras[scale]
+        return self.train_cameras[scale] #由前面 cameraList_from_camInfos返回 
 
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]

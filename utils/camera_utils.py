@@ -52,31 +52,41 @@ def loadCam(args, id, cam_info, resolution_scale):
                   image_name=cam_info.image_name, uid=id, data_device=args.data_device)
 
 def cameraList_from_camInfos(cam_infos, resolution_scale, args):
-    camera_list = []
-
-    for id, c in enumerate(cam_infos):
-        camera_list.append(loadCam(args, id, c, resolution_scale))
-
-    return camera_list
+    """将原始相机信息转换为相机对象列表"""
+    camera_list = []  # 初始化空列表存储相机对象
+    
+    # 遍历所有相机配置信息
+    for id, c in enumerate(cam_infos):  # 带索引遍历保证相机ID唯一性
+        # 加载并配置单个相机参数
+        camera_list.append(loadCam(args, id, c, resolution_scale))  # 调用加载函数生成相机实例
+    
+    return camera_list  # 返回完整相机对象集合
 
 def camera_to_JSON(id, camera : Camera):
-    Rt = np.zeros((4, 4))
-    Rt[:3, :3] = camera.R.transpose()
-    Rt[:3, 3] = camera.T
-    Rt[3, 3] = 1.0
+    """将相机数据转换为JSON可序列化格式"""
+    # 构建相机到世界坐标系的变换矩阵
+    Rt = np.zeros((4, 4))                   # 初始化4x4齐次坐标矩阵
+    Rt[:3, :3] = camera.R.transpose()       # 旋转矩阵转置后存入前三行三列
+    Rt[:3, 3] = camera.T                    # 平移向量存入前三行第四列
+    Rt[3, 3] = 1.0                          # 齐次坐标补位
 
-    W2C = np.linalg.inv(Rt)
-    pos = W2C[:3, 3]
-    rot = W2C[:3, :3]
-    serializable_array_2d = [x.tolist() for x in rot]
+    # 计算世界到相机坐标系的变换矩阵
+    W2C = np.linalg.inv(Rt)                 # 求逆矩阵得到世界坐标系到相机坐标系变换
+    pos = W2C[:3, 3]                        # 提取相机在世界空间中的位置坐标
+    rot = W2C[:3, :3]                       # 提取相机的旋转矩阵分量
+    
+    # 准备可序列化的旋转数据
+    serializable_array_2d = [x.tolist() for x in rot]  # 将numpy数组转为嵌套列表
+
+    # 构建标准化相机参数字典
     camera_entry = {
-        'id' : id,
-        'img_name' : camera.image_name,
-        'width' : camera.width,
-        'height' : camera.height,
-        'position': pos.tolist(),
-        'rotation': serializable_array_2d,
-        'fy' : fov2focal(camera.FovY, camera.height),
-        'fx' : fov2focal(camera.FovX, camera.width)
+        'id' : id,                          # 相机唯一标识符
+        'img_name' : camera.image_name,     # 关联图像文件名
+        'width' : camera.width,             # 图像水平分辨率
+        'height' : camera.height,           # 图像垂直分辨率
+        'position': pos.tolist(),           # 三维位置坐标列表化
+        'rotation': serializable_array_2d,  # 3x3旋转矩阵二维列表
+        'fy' : fov2focal(camera.FovY, camera.height),  # 垂直焦距计算
+        'fx' : fov2focal(camera.FovX, camera.width)    # 水平焦距计算
     }
-    return camera_entry
+    return camera_entry  # 返回符合JSON格式标准的相机参数

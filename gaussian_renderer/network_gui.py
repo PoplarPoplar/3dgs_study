@@ -24,41 +24,45 @@ addr = None
 listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
 def init(wish_host, wish_port):
-    global host, port, listener
-    host = wish_host
-    port = wish_port
-    listener.bind((host, port))
-    listener.listen()
-    listener.settimeout(0)
+    '''初始化网络监听套接字并配置非阻塞模式'''
+    global host, port, listener        # 声明全局变量以修改网络配置参数
+    host = wish_host                   # 存储用户指定的主机地址
+    port = wish_port                   # 存储用户指定的端口号
+    listener.bind((host, port))        # 将套接字绑定到指定地址端口组合
+    listener.listen()                  # 启用TCP连接监听队列
+    listener.settimeout(0)             # 设置非阻塞模式(立即返回IO操作结果)
 
 def try_connect():
-    global conn, addr, listener
+    '''尝试连接到服务器'''
+    global conn, addr, listener        # 声明全局变量以修改网络连接参数
     try:
-        conn, addr = listener.accept()
+        conn, addr = listener.accept()  # 接受TCP连接请求
         print(f"\nConnected by {addr}")
-        conn.settimeout(None)
+        conn.settimeout(None)           # 设置非阻塞模式(等待服务器响应)
     except Exception as inst:
         pass
-            
+
 def read():
+    '''从服务器接收数据'''
     global conn
-    messageLength = conn.recv(4)
-    messageLength = int.from_bytes(messageLength, 'little')
-    message = conn.recv(messageLength)
-    return json.loads(message.decode("utf-8"))
+    messageLength = conn.recv(4)       # 接收数据长度信息
+    messageLength = int.from_bytes(messageLength, 'little')  # 解析数据长度信息
+    message = conn.recv(messageLength)  # 接收数据内容
+    return json.loads(message.decode("utf-8"))  # 解析JSON数据并返回
 
 def send(message_bytes, verify):
+    '''向服务器发送数据'''
     global conn
     if message_bytes != None:
-        conn.sendall(message_bytes)
-    conn.sendall(len(verify).to_bytes(4, 'little'))
-    conn.sendall(bytes(verify, 'ascii'))
+        conn.sendall(message_bytes)    # 发送数据内容
+    conn.sendall(len(verify).to_bytes(4, 'little'))  # 发送数据长度信息
+    conn.sendall(bytes(verify, 'ascii'))  # 发送验证信息
 
 def receive():
-    message = read()
-
-    width = message["resolution_x"]
-    height = message["resolution_y"]
+    '''从服务器接收渲染参数'''
+    message = read()  # 接收渲染参数信息
+    width = message["resolution_x"] # 解析渲染参数
+    height = message["resolution_y"] # 解析渲染参数
 
     if width != 0 and height != 0:
         try:
