@@ -84,26 +84,36 @@ def strip_symmetric(sym):
     return strip_lowerdiag(sym)
 
 def build_rotation(r):
-    norm = torch.sqrt(r[:,0]*r[:,0] + r[:,1]*r[:,1] + r[:,2]*r[:,2] + r[:,3]*r[:,3])
+    """
+    将四元数批量转换为3x3旋转矩阵，遵循标准四元数旋转公式：
+    R = | 1-2y²-2z²   2xy-2wz    2xz+2wy  |
+        | 2xy+2wz     1-2x²-2z²  2yz-2wx  |
+        | 2xz-2wy     2yz+2wx    1-2x²-2y² |
+    """
+    # 四元数归一化：q = w + xi + yj + zk → q_normalized = q / ||q||
+    norm = torch.sqrt(r[:,0]*r[:,0] + r[:,1]*r[:,1] + r[:,2]*r[:,2] + r[:,3]*r[:,3])  # ||q|| = sqrt(w²+x²+y²+z²)
+    q = r / norm[:, None]  # 归一化操作，得到单位四元数[N,4]
 
-    q = r / norm[:, None]
+    # 分量提取（注意变量命名：r=w, x=x, y=y, z=z）
+    r = q[:, 0]  # 四元数标量部分w（覆盖输入参数r）
+    x = q[:, 1]  # 向量分量x
+    y = q[:, 2]  # 向量分量y
+    z = q[:, 3]  # 向量分量z
 
+    # 按标准公式构建旋转矩阵（矩阵元素展开计算）
     R = torch.zeros((q.size(0), 3, 3), device='cuda')
-
-    r = q[:, 0]
-    x = q[:, 1]
-    y = q[:, 2]
-    z = q[:, 3]
-
-    R[:, 0, 0] = 1 - 2 * (y*y + z*z)
-    R[:, 0, 1] = 2 * (x*y - r*z)
-    R[:, 0, 2] = 2 * (x*z + r*y)
-    R[:, 1, 0] = 2 * (x*y + r*z)
-    R[:, 1, 1] = 1 - 2 * (x*x + z*z)
-    R[:, 1, 2] = 2 * (y*z - r*x)
-    R[:, 2, 0] = 2 * (x*z - r*y)
-    R[:, 2, 1] = 2 * (y*z + r*x)
-    R[:, 2, 2] = 1 - 2 * (x*x + y*y)
+    R[:, 0, 0] = 1 - 2 * (y*y + z*z)  # R11 = 1 - 2(y² + z²)
+    R[:, 0, 1] = 2 * (x*y - r*z)      # R12 = 2(xy - wz)
+    R[:, 0, 2] = 2 * (x*z + r*y)      # R13 = 2(xz + wy)
+    
+    R[:, 1, 0] = 2 * (x*y + r*z)      # R21 = 2(xy + wz)
+    R[:, 1, 1] = 1 - 2 * (x*x + z*z)  # R22 = 1 - 2(x² + z²)
+    R[:, 1, 2] = 2 * (y*z - r*x)      # R23 = 2(yz - wx)
+    
+    R[:, 2, 0] = 2 * (x*z - r*y)      # R31 = 2(xz - wy)
+    R[:, 2, 1] = 2 * (y*z + r*x)      # R32 = 2(yz + wx)
+    R[:, 2, 2] = 1 - 2 * (x*x + y*y)  # R33 = 1 - 2(x² + y²)
+    
     return R
 
 def build_scaling_rotation(s, r):

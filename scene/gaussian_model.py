@@ -417,9 +417,7 @@ class GaussianModel:
         2. 状态初始化 - 重置新增点的梯度累积量和自适应优化参数
         3. 数据对齐 - 保持模型参数与优化器参数的严格一致性
         
-        应用场景：
-        - 克隆高方差高斯点以增强表面细节
-        - 在重建缺失区域插入新点修补空洞
+        应用场景：克隆、分裂
         
         注意：需与prune_points配合使用以控制点云规模，调用前应确保新点参数已正确初始化
         """
@@ -428,7 +426,7 @@ class GaussianModel:
             "f_dc": new_features_dc,            # 新点颜色主成分 [M,1,3]
             "f_rest": new_features_rest,        # 新点颜色残差 [M,15,3]
             "opacity": new_opacities,           # 新点透明度 [M,1]
-            "scaling" : new_scaling,            # 新点缩放因子 [M,3]
+            "scaling" : new_scaling,            # 新点缩放因子 [M,3]    
             "rotation" : new_rotation}          # 新点旋转四元数 [M,4]
 
         optimizable_tensors = self.cat_tensors_to_optimizer(d)  # 将新点参数合并到优化器
@@ -446,61 +444,138 @@ class GaussianModel:
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")            # 投影半径重置
 
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
-        n_init_points = self.get_xyz.shape[0]
-        # Extract points that satisfy the gradient condition
-        padded_grad = torch.zeros((n_init_points), device="cuda")
-        padded_grad[:grads.shape[0]] = grads.squeeze()
-        selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)
-        selected_pts_mask = torch.logical_and(selected_pts_mask,
-                                              torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
+        """
+        对高斯点云进行加密和分裂操作，用于增强高梯度区域的细节表现
+        主要流程：
+        1. 根据梯度阈值筛选需要分裂的质点
+        2. 生成新质点并计算其属性（位置、缩放、旋转等）
+        3. 将新质点加入系统并修剪原始质点
+        
+        参数：
+        grads: 各质点的梯度值，反映表面变化强度
+        grad_threshold: 分裂操作的梯度阈值
+        scene_extent: 场景尺度，用于自适应密度控制
+        N: 每个质点分裂生成的新质点数量，默认2
+        """
+        # 获取初始质点总数
+        n_init_points = self.get_xyz.shape[0]  
+        
+        # 梯度数据对齐（处理可能存在的维度不匹配）
+        padded_grad = torch.zeros((n_init_points), device="cuda") 
+        padded_grad[:grads.shape[0]] = grads.squeeze()  # 填充梯度数据
+        
+        # 创建选择掩码：梯度达标且尺寸足够大的质点
+        selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)  # 选择梯度达标的质点
+        selected_pts_mask = torch.logical_and(
+            selected_pts_mask,
+            torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent # 选择尺寸足够大的质点
+        )  # 组合选择条件
 
-        stds = self.get_scaling[selected_pts_mask].repeat(N,1)
-        means =torch.zeros((stds.size(0), 3),device="cuda")
-        samples = torch.normal(mean=means, std=stds)
-        rots = build_rotation(self._rotation[selected_pts_mask]).repeat(N,1,1)
-        new_xyz = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.get_xyz[selected_pts_mask].repeat(N, 1)
-        new_scaling = self.scaling_inverse_activation(self.get_scaling[selected_pts_mask].repeat(N,1) / (0.8*N))
-        new_rotation = self._rotation[selected_pts_mask].repeat(N,1)
-        new_features_dc = self._features_dc[selected_pts_mask].repeat(N,1,1)
+        # 新质点生成参数计算
+        stds = self.get_scaling[selected_pts_mask].repeat(N,1)  # 重复缩放参数作为标准差
+        means = torch.zeros((stds.size(0), 3),device="cuda")    # 均值归零
+        samples = torch.normal(mean=means, std=stds)            # 生成随机偏移量
+        
+        # 坐标变换计算
+        #如果rots原本的形状是(M, 3, 3)（其中M是点的个数），
+        # 那么经过.repeat(N,1,1)操作后，rots的新形状将会是(N*M, 3, 3)。
+        # 这意味着对于每一个满足条件的旋转矩阵，即分裂点的旋转矩阵，都会生成N个相同副本，
+        # 并将这些副本拼接成一个新的张量，用于后续的新质点生成操作。
+        rots = build_rotation(self._rotation[selected_pts_mask]).repeat(N,1,1)  # 扩展旋转矩阵，调用.repeat(N,1,1)意味着沿着第一个维度重复N次，而后面两个维度保持不变。
+        new_xyz = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + \
+                self.get_xyz[selected_pts_mask].repeat(N, 1)  # 计算新坐标
+        
+        # 属性参数调整
+        new_scaling = self.scaling_inverse_activation(  # 缩放参数逆向变换
+            self.get_scaling[selected_pts_mask].repeat(N,1) / (0.8*N))  # 缩放衰减
+        new_rotation = self._rotation[selected_pts_mask].repeat(N,1)     # 复制旋转参数
+        new_features_dc = self._features_dc[selected_pts_mask].repeat(N,1,1)  # 复制颜色特征
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
-        new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
+        new_opacity = self._opacity[selected_pts_mask].repeat(N,1)       # 复制透明度
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation)
+        # 将新质点加入系统
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, 
+                                new_opacity, new_scaling, new_rotation)
 
-        prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
-        self.prune_points(prune_filter)
+        # 创建修剪过滤器：保留原始未选质点，移除已分裂的原始质点
+        prune_filter = torch.cat((
+            selected_pts_mask,  # 标记原始选中质点（True表示需要修剪）
+            torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)  # 新质点保留
+        ))
+        self.prune_points(prune_filter)  # 执行修剪操作，移除已经分裂的原始质点
 
     def densify_and_clone(self, grads, grad_threshold, scene_extent):
-        # Extract points that satisfy the gradient condition
-        selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
-        selected_pts_mask = torch.logical_and(selected_pts_mask,
-                                              torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent)
+        """
+        通过克隆方式加密点云，适用于低缩放因子的高梯度区域
+        功能流程：
+        1. 根据梯度阈值筛选需要克隆的质点
+        2. 复制选中质点的全部属性
+        3. 将克隆体加入系统并执行后续处理
+        """
+        # 筛选条件：梯度达标且缩放不超过密度控制阈值
+        selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)  # 计算梯度L2范数并比较阈值
+        selected_pts_mask = torch.logical_and(
+            selected_pts_mask,
+            torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent  # 缩放最大值不超过场景密度控制范围
+        )
         
-        new_xyz = self._xyz[selected_pts_mask]
-        new_features_dc = self._features_dc[selected_pts_mask]
-        new_features_rest = self._features_rest[selected_pts_mask]
-        new_opacities = self._opacity[selected_pts_mask]
-        new_scaling = self._scaling[selected_pts_mask]
-        new_rotation = self._rotation[selected_pts_mask]
+        # 克隆选中质点的全部属性
+        new_xyz = self._xyz[selected_pts_mask]               # 坐标克隆 [M,3]
+        new_features_dc = self._features_dc[selected_pts_mask]  # 主颜色特征克隆 [M,1,3]
+        new_features_rest = self._features_rest[selected_pts_mask]  # 辅助颜色特征克隆 [M,15,3]
+        new_opacities = self._opacity[selected_pts_mask]     # 透明度克隆 [M,1]
+        new_scaling = self._scaling[selected_pts_mask]       # 缩放参数克隆 [M,3]
+        new_rotation = self._rotation[selected_pts_mask]     # 旋转参数克隆 [M,4]
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation)
+        # 将克隆体加入系统
+        self.densification_postfix(
+            new_xyz, new_features_dc, new_features_rest, 
+            new_opacities, new_scaling, new_rotation  # 执行密度更新后处理
+        )
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size):
-        grads = self.xyz_gradient_accum / self.denom
-        grads[grads.isnan()] = 0.0
+        """
+        点云密度调节与修剪的集成操作，包含：
+        1. 梯度计算与NaN处理
+        2. 执行克隆和分裂加密
+        3. 多条件筛选修剪目标
+        4. 显存优化清理
+        参数：
+        max_grad: 加密操作的梯度阈值
+        min_opacity: 透明度修剪阈值
+        extent: 场景空间范围（用于尺寸判断）
+        max_screen_size: 屏幕空间最大尺寸阈值
+        """
+        grads = self.xyz_gradient_accum / self.denom               # 计算平均梯度：累积梯度/更新次数
+        grads[grads.isnan()] = 0.0                                 # 处理非法梯度值（NaN置零）
 
-        self.densify_and_clone(grads, max_grad, extent)
-        self.densify_and_split(grads, max_grad, extent)
+        self.densify_and_clone(grads, max_grad, extent)            # 执行克隆式加密
+        self.densify_and_split(grads, max_grad, extent)            # 执行分裂式加密
 
-        prune_mask = (self.get_opacity < min_opacity).squeeze()
+        prune_mask = (self.get_opacity < min_opacity).squeeze()    # 基础修剪条件：透明度不足
         if max_screen_size:
-            big_points_vs = self.max_radii2D > max_screen_size
-            big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
-            prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
-        self.prune_points(prune_mask)
-
-        torch.cuda.empty_cache()
-
+            big_points_vs = self.max_radii2D > max_screen_size     # 屏幕空间过大（像素半径超标）
+            big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent  # 世界空间过大（超过场景尺度10%）
+            prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)  # 组合修剪条件
+            
+        self.prune_points(prune_mask)                              # 执行修剪操作
+        torch.cuda.empty_cache()                                   # 释放GPU缓存碎片
+        
+    #该方法是3D高斯泼溅实现自适应密度控制的核心数据采集环节，通过持续监测点云在视图空间中的运动趋势，为后续的加密/修剪决策提供量化依据。
     def add_densification_stats(self, viewspace_point_tensor, update_filter):
-        self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
-        self.denom[update_filter] += 1
+        """
+        累积点云密度化所需的梯度统计信息，用于后续加密决策
+        功能：
+        1. 计算视图空间XY平面梯度范数
+        2. 累加梯度幅值到缓存器
+        3. 更新计数器为后续计算平均梯度准备
+        参数：
+        viewspace_point_tensor: 视图空间坐标张量（需已计算梯度）
+        update_filter: 需要更新的质点掩码（布尔张量）
+        """
+        self.xyz_gradient_accum[update_filter] += torch.norm(
+            viewspace_point_tensor.grad[update_filter,:2],  # 提取梯度XY分量 [N,2]
+            dim=-1,                                          # 沿最后维度计算范数
+            keepdim=True                                     # 保持维度用于广播加法
+        )
+        self.denom[update_filter] += 1  # 有效更新计数器+1（用于后续计算平均梯度）
