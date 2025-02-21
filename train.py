@@ -94,8 +94,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # 背景选择逻辑
         bg = torch.rand((3), device="cuda") if opt.random_background else background  # 随机背景或固定背景
 
-        # 执行渲染操作 #!注释到这里了
-        render_pkg = render(viewpoint_cam, gaussians, pipe, bg)  # 渲染当前视角得到图像和中间数据   pipe为PipelineParams类的实例
+        # 执行渲染操作 #TODO 这里包含CUDA代码，以后再阅读
+        render_pkg = render(viewpoint_cam, gaussians, pipe, bg)  # 渲染当前视角得到图像和中间数据 这块很多使用CUDA和C  pipe为PipelineParams类的实例
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
         # 损失计算与反向传播
