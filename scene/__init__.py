@@ -79,7 +79,7 @@ class Scene:
             # scene_info.train_cameras：包含原始相机参数（位置、旋转、内参等）
             # resolution_scale：分辨率缩放因子（例如 0.5 表示降采样到一半分辨率）
             # args：可能包含数据路径、图像尺寸限制等参数
-            self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args)
+            self.train_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.train_cameras, resolution_scale, args) #返回 Camera 类的实例
 
             # --------------- 加载测试集相机数据 ---------------
             print("Loading Test Cameras")
@@ -99,7 +99,7 @@ class Scene:
         self.gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))
 
     def getTrainCameras(self, scale=1.0):
-        return self.train_cameras[scale] #由前面 cameraList_from_camInfos返回 
+        return self.train_cameras[scale] #由前面 cameraList_from_camInfo 返回  Camera 类的实例，Camera类有original_image属性
 
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]

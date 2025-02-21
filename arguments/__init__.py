@@ -76,7 +76,7 @@ class PipelineParams(ParamGroup):
 class OptimizationParams(ParamGroup):
     def __init__(self, parser):
         # 优化相关的参数初始化
-        self.iterations = 30_00  # 最大迭代次数，默认设置为30000次
+        self.iterations = 30_000  # 最大迭代次数，默认设置为30000次
         self.position_lr_init = 0.00016  # 初始位置学习率，影响位置更新的步长
         self.position_lr_final = 0.0000016  # 最终位置学习率，优化结束时的学习率
         self.position_lr_delay_mult = 0.01  # 延迟因子，控制学习率衰减速度

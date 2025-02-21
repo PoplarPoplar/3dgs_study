@@ -24,23 +24,60 @@ from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
 
 class CameraInfo(NamedTuple):
-    uid: int
-    R: np.array
-    T: np.array
-    FovY: np.array
-    FovX: np.array
-    image: np.array
-    image_path: str
-    image_name: str
-    width: int
-    height: int
+    """
+    相机数据容器（不可变数据结构），存储单张图像的采集信息和相机参数
+    用于从COLMAP等SfM系统加载的原始数据组织，便于后续处理
+    """
+    uid: int          # 唯一标识符（通常对应COLMAP的image_id）
+    R: np.array       # 旋转矩阵 (3x3)，世界坐标系到相机坐标系的旋转
+    T: np.array       # 平移向量 (3x1)，世界坐标系到相机坐标系的平移
+    FovY: np.array    # 垂直视场角（弧度），通过图像高度计算得到
+    FovX: np.array    # 水平视场角（弧度），通过图像宽度计算得到
+    image: np.array   # 图像像素数据 (H,W,3) 或 (H,W,4)，uint8格式
+    image_path: str   # 图像文件绝对路径
+    image_name: str   # 图像文件名（不含路径）
+    width: int        # 图像实际宽度（像素）
+    height: int       # 图像实际高度（像素）
 
 class SceneInfo(NamedTuple):
-    point_cloud: BasicPointCloud
-    train_cameras: list
-    test_cameras: list
-    nerf_normalization: dict
-    ply_path: str
+    """
+    场景数据容器（不可变数据结构），整合3D重建场景的所有元素
+    用于在训练/测试流程中传递完整的场景上下文信息
+    """
+    point_cloud: BasicPointCloud  # 初始点云数据（包含点坐标、颜色等）
+    train_cameras: list           # 训练用相机集合 [CameraInfo]
+    test_cameras: list            # 测试用相机集合 [CameraInfo]
+    nerf_normalization: dict      # 归一化参数（包含平移、缩放等参数）
+    ply_path: str                 # 点云文件存储路径（用于调试和可视化）
+
+"""
+CameraInfo 字段关系示意图：
+COLMAP数据 → CameraInfo → 3DGS处理流水线
+    │                        │
+    ├─ image_path: 原始图像路径   ├─ R/T: 用于计算视图矩阵
+    └─ FovX/Y: 投影矩阵计算    → 光栅化参数
+
+SceneInfo 核心作用：
++-----------------+-----------------------+
+| 组件            | 功能                  |
++-----------------+-----------------------+
+| point_cloud     | 3D几何初始化数据       |
+| train_cameras   | 优化时的监督信号源     |
+| test_cameras    | 验证渲染质量          |
+| nerf_normalization | 场景坐标系归一化    |
+| ply_path        | 点云导出/重加载路径    |
++-----------------+-----------------------+
+"""
+
+"""
+典型数据流示例：
+1. 从COLMAP加载多个CameraInfo
+2. 生成初始point_cloud（可能从SfM点云转换）
+3. 计算nerf_normalization（场景中心化）
+4. 构建SceneInfo并传递给训练器
+5. 训练过程中通过train_cameras获取监督数据
+"""
+
 #该函数的作用是根据相机的位置信息（即旋转矩阵 R 和平移向量 T）
 #计算一个包围所有相机的球体的中心和半径，确定了相机的范围。
 #这些信息通常用于神经辐射场（NeRF）模型中的场景预处理（如归一化），
