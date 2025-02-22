@@ -97,7 +97,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # 执行渲染操作 #TODO 这里包含CUDA代码，以后再阅读
         render_pkg = render(viewpoint_cam, gaussians, pipe, bg)  # 渲染当前视角得到图像和中间数据 这块很多使用CUDA和C  pipe为PipelineParams类的实例
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
-
+        
         # 损失计算与反向传播
         gt_image = viewpoint_cam.original_image.cuda()  # 获取真实图像 original_image是Camera类的属性
         Ll1 = l1_loss(image, gt_image)                  # 计算L1损失
